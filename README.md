@@ -1,5 +1,7 @@
 # insta360-link-cli
 
+[![build](https://github.com/fmontes/insta360-link-cli/actions/workflows/build.yml/badge.svg)](https://github.com/fmontes/insta360-link-cli/actions/workflows/build.yml)
+
 A tiny macOS CLI to control the **Insta360 Link 2** webcam — recenter the
 gimbal, pan/tilt/zoom, and toggle AI subject tracking — **without opening the
 slow official app**.
@@ -21,7 +23,8 @@ The app doesn't even need to be running.
 
 ## Install
 
-Requires macOS on **Apple Silicon** (arm64) and an Insta360 Link 2.
+Requires macOS (Apple Silicon or Intel — the binaries are universal) and an
+Insta360 Link 2.
 
 ```bash
 git clone https://github.com/fmontes/insta360-link-cli.git
@@ -128,12 +131,19 @@ install.sh         symlinks linkcam onto your PATH
 
 ## Compatibility & caveats
 
-- **Apple Silicon only** in the prebuilt form (arm64). On Intel, run `make`.
+- Prebuilt binaries are **universal** (arm64 + x86_64), so they run on both
+  Apple Silicon and Intel Macs.
 - Tested against **Insta360 Link 2** (USB `0x2e1a:0x4c04`). Other Insta360
-  cameras may use different XU selectors — `xu-probe scan` will help you find
-  them.
+  cameras may use different XU selectors — see
+  [CONTRIBUTING.md](CONTRIBUTING.md) for how to find them with `xu-probe scan`.
 - Reverse-engineered from observed behavior; not affiliated with or endorsed by
   Insta360. Use at your own risk.
+
+## Contributing
+
+PRs welcome — especially support for other Insta360 cameras. See
+[CONTRIBUTING.md](CONTRIBUTING.md), which documents the differential-scan method
+used to reverse-engineer the AI-tracking command.
 
 ## Credits
 

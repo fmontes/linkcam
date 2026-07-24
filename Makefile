@@ -4,7 +4,10 @@
 # The uvc-util sources are MRC-era Objective-C, so -fno-objc-arc is required.
 
 CC      := clang
-CFLAGS  := -fno-objc-arc -Wno-deprecated-declarations -O2
+# Build universal (arm64 + x86_64) so the binaries run on both Apple Silicon
+# and Intel Macs. Override on the command line, e.g. `make ARCHS="-arch arm64"`.
+ARCHS   := -arch arm64 -arch x86_64
+CFLAGS  := $(ARCHS) -fno-objc-arc -Wno-deprecated-declarations -O2
 FRAMEWORKS := -framework Foundation -framework IOKit -framework CoreFoundation
 
 SRC     := src

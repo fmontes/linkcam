@@ -1,0 +1,37 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # needed to create the Release and upload assets
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build universal binaries
+        run: make
+
+      - name: Package
+        run: |
+          ver="${GITHUB_REF_NAME}"
+          pkg="insta360-link-cli-${ver}"
+          mkdir -p "dist/${pkg}/bin"
+          cp linkcam install.sh README.md LICENSE "dist/${pkg}/"
+          cp bin/uvc-util bin/xu-probe "dist/${pkg}/bin/"
+          cd dist
+          tar -czf "${pkg}.tar.gz" "${pkg}"
+          shasum -a 256 "${pkg}.tar.gz" > "${pkg}.tar.gz.sha256"
+          ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: true

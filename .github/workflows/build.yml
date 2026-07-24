@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build helpers
+        run: make
+
+      - name: Verify universal binaries
+        run: |
+          for b in bin/uvc-util bin/xu-probe; do
+            echo "== $b =="
+            file "$b"
+            lipo -archs "$b"
+            # both slices must be present
+            lipo -archs "$b" | grep -q arm64
+            lipo -archs "$b" | grep -q x86_64
+          done
+
+      - name: Smoke-test the CLI (no camera on CI — expect a clean "not found")
+        run: |
+          # linkcam should run and fail gracefully without a camera attached,
+          # not crash. Exit code 1 with the expected message is success here.
+          out="$(./linkcam status 2>&1 || true)"
+          echo "$out"
+          echo "$out" | grep -qi "not found" || {
+            echo "unexpected output from linkcam"; exit 1; }
