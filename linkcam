@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+#
+# linkcam — instantly recenter the Insta360 Link 2 gimbal (and more)
+#
+# The Link 2's gimbal is controlled via standard UVC PanTilt Absolute.
+# macOS won't let libusb claim the camera interface, so we drive it through
+# IOKit using uvc-util (bundled alongside this script).
+#
+# Usage:
+#   linkcam                  # center the gimbal (pan=0, tilt=0)  [default]
+#   linkcam status           # show pan/tilt, zoom, and ai-tracking state
+#   linkcam ai [on|off]      # toggle (or set) AI subject tracking
+#   linkcam zoom <n>         # set zoom (100 = 1x; check 'status' for range)
+#   linkcam pan <n>          # set pan only (tilt unchanged)
+#   linkcam tilt <n>         # set tilt only (pan unchanged)
+#   linkcam set <pan> <tilt> # set both
+#
+set -euo pipefail
+
+# Resolve the real script location even when invoked through a symlink,
+# so the bundled uvc-util sitting next to it is always found.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+# The compiled helpers live in bin/ next to this script (repo layout), but
+# also accept them sitting directly alongside it (e.g. a flat install).
+if [ -x "$SCRIPT_DIR/bin/uvc-util" ]; then
+    HELPER_DIR="$SCRIPT_DIR/bin"
+else
+    HELPER_DIR="$SCRIPT_DIR"
+fi
+UVC="$HELPER_DIR/uvc-util"
+XU="$HELPER_DIR/xu-probe"     # raw vendor Extension Unit access (AI tracking)
+
+# Insta360 Link 2 — matched by USB vendor:product so the device index
+# doesn't matter (other cameras can come and go).
+VENDOR_PRODUCT="0x2e1a:0x4c04"
+SEL=(-V "$VENDOR_PRODUCT")
+
+# AI tracking is a vendor XU control (reverse-engineered): writing 01/00 to
+# unit 11, selector 0x02 turns the Link 2's subject tracking on/off.
+AI_UNIT=11
+AI_SEL=0x02
+
+die() { echo "linkcam: $*" >&2; exit 1; }
+
+[ -x "$UVC" ] || die "uvc-util not found at $UVC"
+[ -x "$XU" ]  || die "xu-probe not found at $XU"
+
+# Fail clearly if the camera isn't plugged in.
+if ! "$UVC" -c >/dev/null 2>&1 || ! "$UVC" "${SEL[@]}" -o pan-tilt-abs >/dev/null 2>&1; then
+    die "Insta360 Link 2 not found. Is it plugged in and awake?"
+fi
+
+get_pt() { "$UVC" "${SEL[@]}" -o pan-tilt-abs 2>/dev/null; }
+get_num() { echo "$1" | sed -E "s/.*$2=(-?[0-9]+).*/\1/"; }
+
+# Read the AI-tracking enable byte (00 = off, 01 = on).
+ai_state() {
+    "$XU" -V "$VENDOR_PRODUCT" get "$AI_UNIT" "$AI_SEL" 1 2>/dev/null \
+        | tail -1 | tr -d ' '
+}
+ai_set() { "$XU" -V "$VENDOR_PRODUCT" set "$AI_UNIT" "$AI_SEL" "$1" >/dev/null 2>&1; }
+
+cmd="${1:-center}"
+
+case "$cmd" in
+  center|"")
+    "$UVC" "${SEL[@]}" -s pan-tilt-abs="default" >/dev/null
+    echo "✓ recentered (pan=0, tilt=0)"
+    ;;
+  status)
+    pt="$(get_pt)"
+    zoom="$("$UVC" "${SEL[@]}" -o zoom-abs 2>/dev/null || echo '?')"
+    case "$(ai_state)" in 01) ai="on" ;; 00) ai="off" ;; *) ai="?" ;; esac
+    echo "pan/tilt:    $pt"
+    echo "zoom:        $zoom"
+    echo "ai tracking: $ai"
+    ;;
+  ai)
+    want="${2:-toggle}"
+    case "$want" in
+      on)  ai_set 01; echo "✓ ai tracking ON" ;;
+      off) ai_set 00; echo "✓ ai tracking OFF" ;;
+      toggle)
+        case "$(ai_state)" in
+          01) ai_set 00; echo "✓ ai tracking OFF" ;;
+          00) ai_set 01; echo "✓ ai tracking ON" ;;
+          *)  die "couldn't read AI tracking state" ;;
+        esac ;;
+      status)
+        case "$(ai_state)" in 01) echo "ai tracking: on" ;; 00) echo "ai tracking: off" ;; *) echo "ai tracking: ?" ;; esac ;;
+      *) die "usage: linkcam ai [on|off|toggle|status]" ;;
+    esac
+    ;;
+  zoom)
+    [ $# -ge 2 ] || die "usage: linkcam zoom <n>"
+    "$UVC" "${SEL[@]}" -s zoom-abs="$2" >/dev/null
+    echo "✓ zoom=$2"
+    ;;
+  pan)
+    [ $# -ge 2 ] || die "usage: linkcam pan <n>"
+    cur="$(get_pt)"; tilt="$(get_num "$cur" tilt)"
+    "$UVC" "${SEL[@]}" -s pan-tilt-abs="{pan=$2,tilt=$tilt}" >/dev/null
+    echo "✓ pan=$2 (tilt=$tilt)"
+    ;;
+  tilt)
+    [ $# -ge 2 ] || die "usage: linkcam tilt <n>"
+    cur="$(get_pt)"; pan="$(get_num "$cur" pan)"
+    "$UVC" "${SEL[@]}" -s pan-tilt-abs="{pan=$pan,tilt=$2}" >/dev/null
+    echo "✓ tilt=$2 (pan=$pan)"
+    ;;
+  set)
+    [ $# -ge 3 ] || die "usage: linkcam set <pan> <tilt>"
+    "$UVC" "${SEL[@]}" -s pan-tilt-abs="{pan=$2,tilt=$3}" >/dev/null
+    echo "✓ pan=$2, tilt=$3"
+    ;;
+  -h|--help|help)
+    sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    die "unknown command '$cmd' (try: center, status, ai, zoom, pan, tilt, set)"
+    ;;
+esac

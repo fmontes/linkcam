@@ -1,0 +1,11 @@
+# Build artifacts (the binaries in bin/ ARE committed on purpose; these are
+# just intermediate files if you build elsewhere)
+*.o
+*.dSYM/
+
+# macOS cruft
+.DS_Store
+
+# Python (only used by the optional dev probes, not shipped here)
+.venv/
+__pycache__/
