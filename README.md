@@ -45,13 +45,28 @@ linkcam ai               # toggle AI subject tracking
 linkcam ai on            # force AI tracking on
 linkcam ai off           # force AI tracking off
 linkcam zoom 150         # set zoom (100 = 1x)
-linkcam pan -30000       # pan only (tilt unchanged)
-linkcam tilt 20000       # tilt only (pan unchanged)
+linkcam pan -30          # pan only, in degrees (tilt unchanged)
+linkcam tilt 20          # tilt only, in degrees (pan unchanged)
 linkcam set 0 0          # set pan and tilt explicitly
 ```
 
 Handy combo for the AI-drift problem: `linkcam ai off` stops tracking from
 wandering the camera, and `linkcam` recenters it.
+
+### Pan/tilt units and range
+
+Pan and tilt take **degrees** (`30`, `-12.5`). Append `u` to pass raw
+1/3600-degree UVC units instead (`linkcam pan 108000u`).
+
+Two hardware quirks the CLI handles for you:
+
+- **1-degree steps.** The control's step size is 3600 units = 1°, and the
+  camera rounds any write to a multiple of it. A raw write of `1000`
+  quantizes to `0` and looks like nothing happened.
+- **The advertised range is wrong.** The USB descriptor claims ±648000
+  (±180°), but the gimbal physically stops earlier and silently clamps.
+  Measured travel is **pan ±145°**, **tilt −90° to +100°**. Out-of-range
+  values are clamped, and the printed result is what the gimbal actually did.
 
 ## How it works
 

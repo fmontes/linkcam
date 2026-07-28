@@ -11,9 +11,13 @@
 #   linkcam status           # show pan/tilt, zoom, and ai-tracking state
 #   linkcam ai [on|off]      # toggle (or set) AI subject tracking
 #   linkcam zoom <n>         # set zoom (100 = 1x; check 'status' for range)
-#   linkcam pan <n>          # set pan only (tilt unchanged)
-#   linkcam tilt <n>         # set tilt only (pan unchanged)
-#   linkcam set <pan> <tilt> # set both
+#   linkcam pan <deg>        # set pan only, in degrees (tilt unchanged)
+#   linkcam tilt <deg>       # set tilt only, in degrees (pan unchanged)
+#   linkcam set <pan> <tilt> # set both, in degrees
+#
+# Pan/tilt take DEGREES (e.g. "30", "-12.5"). Suffix "u" for raw 1/3600-deg
+# units. The gimbal only moves in 1-degree steps and its real travel is
+# pan +/-145, tilt -90..+100; values are snapped and clamped to fit.
 #
 set -euo pipefail
 
@@ -59,6 +63,39 @@ fi
 get_pt() { "$UVC" "${SEL[@]}" -o pan-tilt-abs 2>/dev/null; }
 get_num() { echo "$1" | sed -E "s/.*$2=(-?[0-9]+).*/\1/"; }
 
+# The gimbal works in 1/3600-degree units and only accepts multiples of the
+# 3600 step size — a write of 1000 quantizes to 0 and looks like nothing
+# happened. The descriptor advertises +/-648000 but the gimbal physically
+# stops well short of that and silently clamps, so we use the measured range.
+STEP=3600
+PAN_MIN=-522000   PAN_MAX=522000     # +/-145 degrees
+TILT_MIN=-324000  TILT_MAX=360000    # -90 .. +100 degrees
+
+# Accept either degrees ("30", "-12.5", "30deg") or raw units ("108000u").
+# Returns raw units snapped to the step size and clamped to the real range.
+to_units() {
+    local raw="$1" min="$2" max="$3" val
+    case "$raw" in
+        *u|*U)          val="${raw%[uU]}" ;;                       # raw units
+        *deg|*d)        val="$(deg_to_units "${raw%%[dD]*}")" ;;    # explicit degrees
+        *)              val="$(deg_to_units "$raw")" ;;            # bare = degrees
+    esac
+    [ -n "$val" ] || die "not a number: $raw"
+    # snap to nearest multiple of STEP (round-half-away-from-zero)
+    val="$(awk -v v="$val" -v s="$STEP" \
+        'BEGIN{ printf "%d", (v<0 ? -1 : 1) * int((v<0?-v:v)/s + 0.5) * s }')"
+    (( val < min )) && val="$min"
+    (( val > max )) && val="$max"
+    echo "$val"
+}
+
+# Prints units on success, nothing on bad input (caller reports the error).
+deg_to_units() {
+    awk -v d="$1" 'BEGIN{ if (d+0 != d && d != "0") exit 1; printf "%d", d * 3600 }' 2>/dev/null
+}
+
+units_to_deg() { awk -v u="$1" 'BEGIN{ printf "%.1f", u / 3600 }'; }
+
 # Read the AI-tracking enable byte (00 = off, 01 = on).
 ai_state() {
     "$XU" -V "$VENDOR_PRODUCT" get "$AI_UNIT" "$AI_SEL" 1 2>/dev/null \
@@ -77,7 +114,9 @@ case "$cmd" in
     pt="$(get_pt)"
     zoom="$("$UVC" "${SEL[@]}" -o zoom-abs 2>/dev/null || echo '?')"
     case "$(ai_state)" in 01) ai="on" ;; 00) ai="off" ;; *) ai="?" ;; esac
-    echo "pan/tilt:    $pt"
+    echo "pan:         $(units_to_deg "$(get_num "$pt" pan)")°"
+    echo "tilt:        $(units_to_deg "$(get_num "$pt" tilt)")°"
+    echo "raw:         $pt"
     echo "zoom:        $zoom"
     echo "ai tracking: $ai"
     ;;
@@ -103,24 +142,28 @@ case "$cmd" in
     echo "✓ zoom=$2"
     ;;
   pan)
-    [ $# -ge 2 ] || die "usage: linkcam pan <n>"
+    [ $# -ge 2 ] || die "usage: linkcam pan <degrees>"
     cur="$(get_pt)"; tilt="$(get_num "$cur" tilt)"
-    "$UVC" "${SEL[@]}" -s pan-tilt-abs="{pan=$2,tilt=$tilt}" >/dev/null
-    echo "✓ pan=$2 (tilt=$tilt)"
+    pan="$(to_units "$2" "$PAN_MIN" "$PAN_MAX")"
+    "$UVC" "${SEL[@]}" -s pan-tilt-abs="{pan=$pan,tilt=$tilt}" >/dev/null
+    echo "✓ pan=$(units_to_deg "$pan")° (tilt=$(units_to_deg "$tilt")°)"
     ;;
   tilt)
-    [ $# -ge 2 ] || die "usage: linkcam tilt <n>"
+    [ $# -ge 2 ] || die "usage: linkcam tilt <degrees>"
     cur="$(get_pt)"; pan="$(get_num "$cur" pan)"
-    "$UVC" "${SEL[@]}" -s pan-tilt-abs="{pan=$pan,tilt=$2}" >/dev/null
-    echo "✓ tilt=$2 (pan=$pan)"
+    tilt="$(to_units "$2" "$TILT_MIN" "$TILT_MAX")"
+    "$UVC" "${SEL[@]}" -s pan-tilt-abs="{pan=$pan,tilt=$tilt}" >/dev/null
+    echo "✓ tilt=$(units_to_deg "$tilt")° (pan=$(units_to_deg "$pan")°)"
     ;;
   set)
-    [ $# -ge 3 ] || die "usage: linkcam set <pan> <tilt>"
-    "$UVC" "${SEL[@]}" -s pan-tilt-abs="{pan=$2,tilt=$3}" >/dev/null
-    echo "✓ pan=$2, tilt=$3"
+    [ $# -ge 3 ] || die "usage: linkcam set <pan-degrees> <tilt-degrees>"
+    pan="$(to_units "$2" "$PAN_MIN" "$PAN_MAX")"
+    tilt="$(to_units "$3" "$TILT_MIN" "$TILT_MAX")"
+    "$UVC" "${SEL[@]}" -s pan-tilt-abs="{pan=$pan,tilt=$tilt}" >/dev/null
+    echo "✓ pan=$(units_to_deg "$pan")°, tilt=$(units_to_deg "$tilt")°"
     ;;
   -h|--help|help)
-    sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//'
     ;;
   *)
     die "unknown command '$cmd' (try: center, status, ai, zoom, pan, tilt, set)"
