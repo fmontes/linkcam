@@ -44,7 +44,7 @@ linkcam status           # show pan/tilt, zoom, and ai-tracking state
 linkcam ai               # toggle AI subject tracking
 linkcam ai on            # force AI tracking on
 linkcam ai off           # force AI tracking off
-linkcam zoom 150         # set zoom (100 = 1x)
+linkcam zoom 1.5         # set zoom, 1x .. 4x
 linkcam pan -30          # pan only, in degrees (tilt unchanged)
 linkcam tilt 20          # tilt only, in degrees (pan unchanged)
 linkcam set 0 0          # set pan and tilt explicitly
@@ -67,6 +67,12 @@ Two hardware quirks the CLI handles for you:
   (±180°), but the gimbal physically stops earlier and silently clamps.
   Measured travel is **pan ±145°**, **tilt −90° to +100°**. Out-of-range
   values are clamped, and the printed result is what the gimbal actually did.
+
+### Zoom units and range
+
+Zoom takes a **multiplier** from `1` to `4` (`linkcam zoom 1.5`, or `1.5x`). Raw control values are accepted too — the underlying UVC `zoom-abs` control runs from `100` (1x) to `400` (4x) — and since the two ranges don't overlap, `linkcam zoom 150` and `linkcam zoom 1.5` mean the same thing.
+
+The CLI resolves and clamps the value before writing it, because `uvc-util` silently writes the control's **maximum** for anything it can't parse: a bare `linkcam zoom 1.1` used to slam the camera to 4x.
 
 ## How it works
 
