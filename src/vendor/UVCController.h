@@ -136,6 +136,12 @@
 */
 - (UInt16) uvcVersion;
 
+/*
+  Returns the unit id of the first vendor Extension Unit advertised by the
+  camera, or zero when the descriptor does not contain one.
+*/
+- (UInt8) extensionUnitId;
+
 /*!
   @method isInterfaceOpen
 

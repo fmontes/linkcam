@@ -9,7 +9,9 @@ You need the macOS **Command Line Tools** (`xcode-select --install`) — no full
 Xcode required.
 
 ```bash
-make          # builds universal (arm64 + x86_64) bin/uvc-util and bin/xu-probe
+make          # builds the universal CLI and diagnostic tools
+make test     # runs parser and CLI regression tests
+make app      # builds dist/LinkCam.app
 make clean
 ```
 
@@ -23,27 +25,34 @@ make ARCHS="-arch arm64"     # or -arch x86_64
 
 | Path | What |
 |------|------|
-| `linkcam` | the CLI — a bash wrapper that calls the two helpers |
-| `bin/` | prebuilt universal binaries (committed) |
+| `linkcam` | thin launcher for the native CLI |
+| `bin/linkcam-cli` | native command-line interface |
+| `src/core/` | shared camera-control API and strict value parsing |
+| `src/cli/` | native CLI entry point |
+| `src/app/` | AppKit status item, popover controls, and video preview |
+| `app/` | app bundle metadata and entitlements |
 | `src/xu-probe.m` | raw vendor Extension Unit (XU) get/set/scan — this project |
 | `src/vendor/` | [uvc-util](https://github.com/jtfrey/uvc-util) sources (MIT) |
-| `Makefile` | builds the helpers |
+| `tests/` | parser and command-line regression tests |
+| `Makefile` | builds and tests the CLI, app, and diagnostic tools |
 
 `xu-probe` reuses uvc-util's `UVCController` (device discovery + IOKit
 `ControlRequest`) and exposes its internal `getData:/setData:atUnitId:`
 methods so we can talk to *raw* XU selectors that uvc-util doesn't model.
 
-## Why IOKit and not libusb
+## Camera access on macOS
 
-On macOS the system camera driver claims the UVC interface, and libusb can't
-detach it (`Access denied`). IOKit control transfers work *cooperatively*
-alongside the driver, so the camera keeps working while we send controls.
+On current macOS releases, the system `UVCAssistant` extension exclusively owns
+the UVC interface. LinkCam uses CoreMediaIO for standard pan, tilt, and zoom
+controls, with the older IOKit implementation retained as a compatibility
+fallback and for raw Extension Unit research. libusb cannot detach the system
+camera driver (`Access denied`) and is not used.
 
 ## Adding support for another Insta360 camera
 
-Different models expose different XU selectors. The method used to find the
-Link 2's AI-tracking command (write `0x01`/`0x00` to unit 11, selector `0x02`)
-generalizes:
+Different models expose different XU selectors. Link 2 tracking is bit 8 of the
+two-byte feature mask at primary extension unit selector `0x1b`; the broader
+discovery and verification method generalizes:
 
 1. **Find your camera's USB vendor:product id.**
    ```bash
@@ -51,9 +60,12 @@ generalizes:
    ```
    Convert to hex (e.g. `0x2e1a:0x4c04`) and use it with `-V`.
 
-2. **List the extension units** — the descriptor probe in the git history
-   (`probe2.py`) prints the XU unit IDs and GUIDs. Insta360 cameras typically
-   have 2–3 units.
+2. **Find the primary extension unit.** `xu-probe` reads the UVC descriptor:
+   ```bash
+   bin/xu-probe -V <vid:pid> units
+   ```
+   Insta360 cameras typically have 2–3 extension units, so scan the additional
+   unit IDs as needed.
 
 3. **Differential scan.** With the feature (e.g. tracking) **off**:
    ```bash
@@ -69,15 +81,17 @@ generalizes:
    own. Take a second `off.txt` a few seconds apart and diff the two OFF scans;
    any selector that changes there is noise — ignore it.
 
-5. **Confirm by writing.** The surviving selector should be a stable byte that
-   flips `00`↔`01`. Verify it actually controls the feature:
+5. **Confirm by writing.** Determine whether the value is a scalar or a bit in
+   a feature mask. For masks, always read–modify–write the complete value so
+   unrelated features are preserved. Verify the result on hardware.
    ```bash
-   bin/xu-probe -V <vid:pid> set <unit> <sel> 01   # turn on
-   bin/xu-probe -V <vid:pid> set <unit> <sel> 00   # turn off
+   bin/xu-probe -V <vid:pid> get <unit> <sel> <length>
+   bin/xu-probe -V <vid:pid> set <unit> <sel> <complete-updated-hex-value>
    ```
 
-6. **Wire it up** in `linkcam` (see the `AI_UNIT`/`AI_SEL` constants and the
-   `ai)` case) and open a PR. Please note which model + firmware you tested.
+6. **Wire it up** in `src/core/LinkCamCore.m`, expose it through the relevant
+   CLI or app surface, add tests, and open a PR. Please note which model and
+   firmware you tested.
 
 The official app also logs verbosely to
 `~/Library/Application Support/Insta360/.../log/<date>/*.log` (e.g.
@@ -86,7 +100,8 @@ while probing.
 
 ## Style
 
-- Keep `linkcam` POSIX-ish bash; it targets the system bash on macOS.
+- Keep camera behavior in `src/core/` so the CLI and app cannot drift apart.
+- Validate numeric CLI input strictly; never pass malformed values to a device.
 - Prefer matching the device by vendor:product id, not a device index.
 - Document any new reverse-engineered command in the README table.
 

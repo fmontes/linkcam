@@ -2,6 +2,8 @@
 # just intermediate files if you build elsewhere)
 *.o
 *.dSYM/
+.build/
+dist/
 
 # macOS cruft
 .DS_Store

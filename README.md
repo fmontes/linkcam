@@ -1,10 +1,10 @@
-# insta360-link-cli
+# LinkCam
 
-[![build](https://github.com/fmontes/insta360-link-cli/actions/workflows/build.yml/badge.svg)](https://github.com/fmontes/insta360-link-cli/actions/workflows/build.yml)
+[![build](https://github.com/fmontes/linkcam/actions/workflows/build.yml/badge.svg)](https://github.com/fmontes/linkcam/actions/workflows/build.yml)
 
-A tiny macOS CLI to control the **Insta360 Link 2** webcam — recenter the
-gimbal, pan/tilt/zoom, and toggle AI subject tracking — **without opening the
-slow official app**.
+A lightweight macOS menu-bar app and CLI for the **Insta360 Link 2** webcam —
+live preview, recenter, pan/tilt/zoom, and AI subject tracking — without opening
+the full official controller.
 
 ```bash
 linkcam            # recenter the gimbal (pan=0, tilt=0)
@@ -12,7 +12,7 @@ linkcam ai         # toggle AI subject tracking on/off
 linkcam status     # show pan/tilt, zoom, and tracking state
 ```
 
-The app doesn't even need to be running.
+The CLI and menu-bar app share the same native camera-control core.
 
 > **Why this exists:** the official Insta360 Link Controller is slow to open,
 > and AI tracking often leaves the camera pointing off to the side. `linkcam`
@@ -27,8 +27,8 @@ Requires macOS (Apple Silicon or Intel — the binaries are universal) and an
 Insta360 Link 2.
 
 ```bash
-git clone https://github.com/fmontes/insta360-link-cli.git
-cd insta360-link-cli
+git clone https://github.com/fmontes/linkcam.git
+cd linkcam
 ./install.sh          # symlinks `linkcam` onto your PATH
 linkcam status
 ```
@@ -36,11 +36,37 @@ linkcam status
 Prebuilt binaries are committed, so there's nothing to compile. (To build them
 yourself, see [Building](#building).)
 
+## Menu-bar app
+
+Build the development app bundle and launch it:
+
+```bash
+make app
+open dist/LinkCam.app
+```
+
+Click the video-camera icon in the macOS menu bar to open a compact controller
+with a live preview, adjustable pan/tilt nudges, recenter, an AI tracking
+switch, camera modes, and a 1×–4× zoom slider. The preview source lists only
+Insta360 cameras, including the physical Link 2 and Insta360 Virtual Camera.
+Pan, tilt, and zoom always control the physical Insta360 Link 2.
+Preview capture starts only while the popover is open, and the selected source
+is remembered between launches.
+
+On first use, the preview explains why camera access is needed before showing
+the macOS permission dialog. If access is denied, it provides a direct button
+to Privacy & Security settings and refreshes when you return. Pan, tilt, and
+zoom controls remain available without preview permission. The development
+bundle is ad-hoc signed so macOS can associate permission with the correct app
+identifier. Developer ID signing, notarization, and DMG packaging are planned
+for releases.
+
 ## Usage
 
 ```bash
 linkcam                  # center the gimbal (pan=0, tilt=0)   [default]
 linkcam status           # show pan/tilt, zoom, and ai-tracking state
+linkcam status --json    # stable machine-readable status
 linkcam ai               # toggle AI subject tracking
 linkcam ai on            # force AI tracking on
 linkcam ai off           # force AI tracking off
@@ -50,8 +76,10 @@ linkcam tilt 20          # tilt only, in degrees (pan unchanged)
 linkcam set 0 0          # set pan and tilt explicitly
 ```
 
-Handy combo for the AI-drift problem: `linkcam ai off` stops tracking from
-wandering the camera, and `linkcam` recenters it.
+Manual pan, tilt, and recenter commands turn AI tracking off and return the
+camera to normal video mode first, preventing the tracking loop from pulling
+the camera back to its previous subject. You can
+also manage it explicitly with `linkcam ai on|off`.
 
 ### Pan/tilt units and range
 
@@ -83,50 +111,55 @@ The Link 2 is a standard **UVC** (USB Video Class) camera.
 - **AI tracking** is *not* standard — it's a proprietary **Extension Unit (XU)**
   command that had to be reverse-engineered (see below).
 
-On macOS you **cannot** drive these with libusb/pyusb: the system camera driver
-claims the USB interface and won't release it (`detach_kernel_driver` →
-*Access denied*). The trick is to issue UVC control transfers through **IOKit**,
-which works *cooperatively* alongside the camera driver. This project does that
-via two small Objective-C helpers:
+On current macOS releases, the system `UVCAssistant` extension owns the USB
+video-control interface. The shared Objective-C core therefore uses:
 
-- **`uvc-util`** — [Jeffrey Frey's tool](https://github.com/jtfrey/uvc-util)
-  (MIT), for standard controls.
-- **`xu-probe`** — a small tool written for this project that adds *raw* XU
-  get/set/scan by unit-id + selector, reusing uvc-util's IOKit plumbing.
+- **CoreMediaIO** for standard pan, tilt, and zoom controls through the system
+  camera service.
+- **`UVCController`** from
+  [Jeffrey Frey's uvc-util](https://github.com/jtfrey/uvc-util) (MIT) as the
+  legacy IOKit fallback and for vendor-specific Extension Unit commands.
+- **`LinkCamCore`** as the typed API shared by the CLI and app.
+
+Direct libusb/pyusb access is not used because macOS claims the camera's USB
+interface and does not allow a user process to detach the system driver.
+
+The standalone **`uvc-util`** and **`xu-probe`** binaries remain available as
+diagnostic tools for exploring standard and vendor-specific controls.
 
 ### Reverse-engineering AI tracking
 
-AI tracking isn't exposed as a standard control, so the on/off command was
-found empirically:
+AI tracking isn't exposed as a standard control. The current protocol was
+confirmed against the official controller and on real Link 2 hardware:
 
 1. **Scan** every XU control (`GET_CUR` across all selectors on all 3 extension
    units) with tracking **off**.
 2. **Toggle** tracking on in the official app, then **re-scan** and **diff**.
 3. **Filter out noise** — some registers (gimbal position, exposure) drift on
    their own, so a second idle scan identifies and removes them.
-4. What remained was a single stable byte that flipped `00`↔`01` exactly with
-   the toggle, then **confirmed** by writing it and watching the camera track.
+4. Compare that evidence with the official controller's implementation, then
+   confirm the candidate by writing it and reading the state back on hardware.
 
 **The result:**
 
-> Writing `0x01` / `0x00` to **Extension Unit 11, selector `0x02`** turns the
-> Link 2's AI subject tracking **on / off**. The camera self-acquires the
-> subject — no target rectangle needed.
+> **Extension Unit 9, selector `0x1b`** is a two-byte feature mask. Bit 8
+> controls Link 2 AI subject tracking (`1` = on, `0` = off). LinkCam performs a
+> read–modify–write so the other feature bits are preserved.
 
 The three vendor extension units (from the USB descriptor):
 
 | Unit | GUID | Role |
 |------|------|------|
-| 9  | `FAF1672D-B71B-4793-8C91-7B1C9B7F95F8` | device info / status |
+| 9  | `FAF1672D-B71B-4793-8C91-7B1C9B7F95F8` | device info, status, feature mask |
 | 10 | `E307E649-4618-A3FF-82FC-2D8B5F216773` | (image/AE params) |
-| 11 | `A8BD5DF2-1A98-474E-8DD0-D92672D194FA` | **AI features** |
+| 11 | `A8BD5DF2-1A98-474E-8DD0-D92672D194FA` | legacy AI-related controls |
 
 Explore further with the raw tool:
 
 ```bash
-bin/xu-probe -V 0x2e1a:0x4c04 scan 11          # dump all controls on unit 11
-bin/xu-probe -V 0x2e1a:0x4c04 get 11 0x02 1    # read AI-tracking state
-bin/xu-probe -V 0x2e1a:0x4c04 set 11 0x02 01   # tracking on
+bin/xu-probe -V 0x2e1a:0x4c04 units             # show the primary XU id
+bin/xu-probe -V 0x2e1a:0x4c04 scan 9            # dump primary XU controls
+bin/xu-probe -V 0x2e1a:0x4c04 get 9 0x1b 2      # read the feature mask
 ```
 
 ## Building
@@ -134,20 +167,27 @@ bin/xu-probe -V 0x2e1a:0x4c04 set 11 0x02 01   # tracking on
 Only the macOS **Command Line Tools** are needed (no full Xcode):
 
 ```bash
-make            # builds bin/uvc-util and bin/xu-probe from src/
+make            # builds the universal CLI and diagnostic tools
+make test       # runs parser and command-line tests
+make app        # builds dist/LinkCam.app
 ```
 
-The uvc-util sources are MRC-era Objective-C, so the build uses `-fno-objc-arc`.
+The project builds universal `arm64` + `x86_64` binaries. The uvc-util sources
+are MRC-era Objective-C, so the native targets use `-fno-objc-arc`.
 
 ## Project layout
 
 ```
-linkcam            the CLI (bash)
-bin/               prebuilt arm64 helpers (uvc-util, xu-probe)
-src/xu-probe.m     raw XU tool (this project)
+linkcam            thin launcher for bin/linkcam-cli
+app/               bundle metadata and camera entitlement
+bin/               universal CLI and diagnostic binaries
+src/app/           AppKit menu-bar app and AVFoundation preview
+src/cli/           native command-line entry point
+src/core/          shared camera-control API and value parsing
+src/xu-probe.m     raw XU diagnostic tool
 src/vendor/        uvc-util sources, MIT (jtfrey/uvc-util)
-Makefile           builds the helpers
-install.sh         symlinks linkcam onto your PATH
+tests/             parser and CLI regression tests
+Makefile           builds and tests all native targets
 ```
 
 ## Compatibility & caveats
@@ -157,6 +197,9 @@ install.sh         symlinks linkcam onto your PATH
 - Tested against **Insta360 Link 2** (USB `0x2e1a:0x4c04`). Other Insta360
   cameras may use different XU selectors — see
   [CONTRIBUTING.md](CONTRIBUTING.md) for how to find them with `xu-probe scan`.
+- On current macOS versions where `UVCAssistant` owns the UVC interface,
+  standard controls use CoreMediaIO while the cooperative IOKit request path is
+  retained for vendor XU commands such as AI tracking.
 - Reverse-engineered from observed behavior; not affiliated with or endorsed by
   Insta360. Use at your own risk.
 

@@ -7,6 +7,7 @@
 // read/write Insta360 vendor XU controls that uvc-util doesn't expose.
 //
 // Usage:
+//   xu-probe -V 0x2e1a:0x4c04 units
 //   xu-probe -V 0x2e1a:0x4c04 get  <unitId> <selector> <length>
 //   xu-probe -V 0x2e1a:0x4c04 set  <unitId> <selector> <hexbytes>
 //   xu-probe -V 0x2e1a:0x4c04 scan <unitId>            # GET_CUR sweep of selectors 1..32
@@ -59,7 +60,7 @@ int main(int argc, char *argv[]) {
             argi = 3;
         }
         if (argi >= argc) {
-            fprintf(stderr, "usage: xu-probe [-V vid:pid] get|set|scan ...\n");
+            fprintf(stderr, "usage: xu-probe [-V vid:pid] units|get|set|scan ...\n");
             return 2;
         }
 
@@ -73,7 +74,11 @@ int main(int argc, char *argv[]) {
 
         const char *cmd = argv[argi++];
 
-        if (strcmp(cmd, "get") == 0 && argi + 2 < argc + 1) {
+        if (strcmp(cmd, "units") == 0) {
+            printf("extension unit: %u\n", [dev extensionUnitId]);
+            return [dev extensionUnitId] ? 0 : 1;
+        }
+        else if (strcmp(cmd, "get") == 0 && argi + 2 < argc + 1) {
             int unit = atoi(argv[argi++]);
             int sel = (int)strtol(argv[argi++], NULL, 0);
             int len = (argi < argc) ? atoi(argv[argi++]) : 8;

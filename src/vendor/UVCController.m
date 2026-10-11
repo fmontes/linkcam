@@ -110,6 +110,13 @@ typedef struct {
   UInt8               bmControls[];
 } __attribute__((packed)) UVC_PU_Header_Descriptor;
 
+typedef struct {
+  UInt8               bLength;
+  UInt8               bDescriptorType;
+  UInt8               bDescriptorSubType;
+  UInt8               bUnitId;
+} __attribute__((packed)) UVC_XU_Header_Descriptor;
+
 /*!
   @enum UVC Processing Unit control enablement bit values
   
@@ -908,6 +915,15 @@ uvc_control_t     UVCControllerControls[] = {
                   break;
                 }
 
+                case VC_EXTENSION_UNIT: {
+                  UVC_XU_Header_Descriptor            *xuHeader = (UVC_XU_Header_Descriptor*)basePtr;
+
+                  if ( ! [_unitIds objectForKey:@"UVC_EXTENSION_UNIT_ID"] ) {
+                    [_unitIds setObject:[NSNumber numberWithInt:xuHeader->bUnitId] forKey:@"UVC_EXTENSION_UNIT_ID"];
+                  }
+                  break;
+                }
+
               }
             }
             basePtr += descriptorPrefix->bLength;
@@ -1294,6 +1310,13 @@ uvc_control_t     UVCControllerControls[] = {
   - (UInt16) uvcVersion
   {
     return _uvcVersion;
+  }
+
+//
+
+  - (UInt8) extensionUnitId
+  {
+    return [[_unitIds objectForKey:@"UVC_EXTENSION_UNIT_ID"] unsignedCharValue];
   }
 
 //

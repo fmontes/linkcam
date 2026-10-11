@@ -11,12 +11,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build helpers
-        run: make
+      - name: Build and test
+        run: make test
+
+      - name: Build menu-bar app
+        run: make app
 
       - name: Verify universal binaries
         run: |
-          for b in bin/uvc-util bin/xu-probe; do
+          for b in bin/linkcam-cli bin/uvc-util bin/xu-probe dist/LinkCam.app/Contents/MacOS/LinkCam; do
             echo "== $b =="
             file "$b"
             lipo -archs "$b"
@@ -25,11 +28,16 @@ jobs:
             lipo -archs "$b" | grep -q x86_64
           done
 
-      - name: Smoke-test the CLI (no camera on CI — expect a clean "not found")
+      - name: Validate app metadata
         run: |
-          # linkcam should run and fail gracefully without a camera attached,
-          # not crash. Exit code 1 with the expected message is success here.
-          out="$(./linkcam status 2>&1 || true)"
+          plutil -lint app/Info.plist
+          plutil -lint app/LinkCam.entitlements
+          plutil -lint dist/LinkCam.app/Contents/Info.plist
+          codesign --verify --deep --strict --verbose=2 dist/LinkCam.app
+
+      - name: Smoke-test the CLI without a camera
+        run: |
+          out="$(./linkcam status --json 2>&1 || true)"
           echo "$out"
-          echo "$out" | grep -qi "not found" || {
+          echo "$out" | grep -q '"connected"' || {
             echo "unexpected output from linkcam"; exit 1; }

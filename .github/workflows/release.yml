@@ -13,16 +13,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build universal binaries
-        run: make
+      - name: Build and test universal binaries
+        run: make test
 
       - name: Package
         run: |
           ver="${GITHUB_REF_NAME}"
-          pkg="insta360-link-cli-${ver}"
+          pkg="linkcam-${ver}"
           mkdir -p "dist/${pkg}/bin"
           cp linkcam install.sh README.md LICENSE "dist/${pkg}/"
-          cp bin/uvc-util bin/xu-probe "dist/${pkg}/bin/"
+          cp bin/linkcam-cli bin/uvc-util bin/xu-probe "dist/${pkg}/bin/"
           cd dist
           tar -czf "${pkg}.tar.gz" "${pkg}"
           shasum -a 256 "${pkg}.tar.gz" > "${pkg}.tar.gz.sha256"
