@@ -752,20 +752,6 @@ static NSBox *separator(void) {
     });
 }
 
-- (BOOL)selectPhysicalPreviewSourceForTracking {
-    NSString *selectedID = [_previewView selectedPreviewSourceID];
-    for (NSDictionary *source in [_previewView availablePreviewSources]) {
-        NSString *name = source[@"name"];
-        if ([name rangeOfString:@"Insta360 Link 2" options:NSCaseInsensitiveSearch].location == NSNotFound) continue;
-        NSString *sourceID = source[@"id"];
-        if ([sourceID isEqualToString:selectedID]) return NO;
-        [_previewView selectPreviewSourceWithID:sourceID];
-        [self refreshPreviewSources];
-        return YES;
-    }
-    return NO;
-}
-
 - (void)performTrackingChange:(int8_t)requested {
     dispatch_async(_deviceQueue, ^{
         if (!self->_device) {
@@ -784,19 +770,11 @@ static NSBox *separator(void) {
 
 - (void)trackingChanged:(NSSwitch *)sender {
     int8_t requested = sender.state == NSControlStateValueOn ? 1 : 0;
-    BOOL switchedPreview = requested && [self selectPhysicalPreviewSourceForTracking];
-    [self beginOperationWithMessage:switchedPreview
-        ? @"Opening Link 2 to find a subject…"
-        : (requested ? @"Starting subject tracking…" : @"Returning to manual control…")];
+    [self beginOperationWithMessage:requested
+        ? @"Starting subject tracking…"
+        : @"Returning to manual control…"];
     _trackingStatus.stringValue = requested ? @"Turning on…" : @"Turning off…";
-
-    if (switchedPreview) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-            [self performTrackingChange:requested];
-        });
-    } else {
-        [self performTrackingChange:requested];
-    }
+    [self performTrackingChange:requested];
 }
 
 - (void)performDirection:(NSInteger)direction {
