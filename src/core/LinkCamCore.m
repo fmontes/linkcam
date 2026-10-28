@@ -13,6 +13,7 @@
 enum {
     LinkCamVendorID = 0x2e1a,
     LinkCamProductID = 0x4c04,
+    LinkCamPro2ProductID = 0x4c06,
     LinkCamVideoModeSelector = 0x02,
     LinkCamVideoModePayloadLength = 56,
     LinkCamVideoModeNormal = 0,
@@ -645,7 +646,8 @@ LinkCamResult LinkCamDeviceOpen(LinkCamDevice **output) {
         (void)findCMIOLinkCamera(&device->cmioDevice, &device->panTiltControl, &device->zoomControl);
 
         for (UVCController *candidate in [UVCController uvcControllers]) {
-            if ([candidate vendorId] == LinkCamVendorID && [candidate productId] == LinkCamProductID) {
+            if ([candidate vendorId] == LinkCamVendorID &&
+                ([candidate productId] == LinkCamProductID || [candidate productId] == LinkCamPro2ProductID)) {
                 device->controller = [candidate retain];
                 break;
             }
