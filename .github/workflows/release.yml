@@ -2,36 +2,176 @@ name: release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release (for example, v0.2.0)
+        required: true
+        type: string
 
 permissions:
   contents: write   # needed to create the Release and upload assets
 
+concurrency:
+  group: release-${{ inputs.tag || github.sha }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: macos-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.sha }}
+          persist-credentials: false
+
+      - name: Prepare release version
+        id: version
+        run: |
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' app/Info.plist)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a numeric major.minor.patch app version."
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" == branch ]]; then
+            RELEASE_TAG="v$version-build.$GITHUB_RUN_NUMBER"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" app/Info.plist
+            echo "automatic=true" >> "$GITHUB_OUTPUT"
+          else
+            if [[ "$RELEASE_TAG" != "v$version" ]]; then
+              echo "::error::Tag $RELEASE_TAG does not match app/Info.plist version $version."
+              exit 1
+            fi
+            echo "automatic=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
 
       - name: Build and test universal binaries
-        run: make test
+        # Rebuild the committed CLI binaries instead of trusting checkout mtimes.
+        run: make -B test app
 
-      - name: Package
+      - name: Configure signing credentials
+        id: signing
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
-          ver="${GITHUB_REF_NAME}"
-          pkg="linkcam-${ver}"
+          required_secrets=(SIGNING_CERTIFICATE_BASE64 SIGNING_CERTIFICATE_PASSWORD SIGNING_IDENTITY APPLE_ID APPLE_TEAM_ID APPLE_APP_SPECIFIC_PASSWORD)
+          configured=0
+          for name in "${required_secrets[@]}"; do
+            if [[ -n "${!name}" ]]; then configured=$((configured + 1)); fi
+          done
+          if [[ "$configured" == 0 ]]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No signing secrets configured; creating an unnotarized prerelease."
+            exit 0
+          fi
+          for name in "${required_secrets[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing $name. Configure all signing secrets or remove them all for an unnotarized prerelease."
+              exit 1
+            fi
+          done
+
+          umask 077
+          certificate="$RUNNER_TEMP/linkcam-signing.p12"
+          keychain="$RUNNER_TEMP/linkcam-signing.keychain-db"
+          keychain_password=$(openssl rand -hex 32)
+          echo "::add-mask::$keychain_password"
+          printf '%s' "$SIGNING_CERTIFICATE_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -P "$SIGNING_CERTIFICATE_PASSWORD" -k "$keychain" -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$certificate"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          xcrun notarytool store-credentials LinkCam-notary --keychain "$keychain" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD"
+          echo "NOTARY_PROFILE=LinkCam-notary" >> "$GITHUB_ENV"
+          echo "NOTARY_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Package DMG
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+        run: |
+          if [[ "$SIGNED" == true ]]; then
+            make release
+          else
+            make dmg
+          fi
+
+      - name: Package CLI archive and release notes
+        id: package
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          pkg="linkcam-${RELEASE_TAG}"
           mkdir -p "dist/${pkg}/bin"
           cp linkcam install.sh README.md LICENSE "dist/${pkg}/"
+          cp src/vendor/LICENSE.uvc-util "dist/${pkg}/LICENSE.uvc-util"
           cp bin/linkcam-cli bin/uvc-util bin/xu-probe "dist/${pkg}/bin/"
           cd dist
           tar -czf "${pkg}.tar.gz" "${pkg}"
           shasum -a 256 "${pkg}.tar.gz" > "${pkg}.tar.gz.sha256"
-          ls -la
+          shasum -a 256 -c -- *.sha256
+          if [[ "$SIGNED" == true ]]; then
+            echo 'The universal DMG is Developer ID signed and notarized by Apple.' > release-notes.md
+          else
+            echo '**Unnotarized test build:** The DMG is ad-hoc signed. macOS Gatekeeper may block downloaded copies. This prerelease is intended for testing.' > release-notes.md
+          fi
+          echo 'Requires macOS 13 or later. Supports Apple Silicon and Intel. Drag LinkCam into Applications, then launch it and click its video-camera menu-bar icon.' >> release-notes.md
+          dmg_files=(*.dmg)
+          if [[ "${#dmg_files[@]}" != 1 || ! -f "${dmg_files[0]}" ]]; then
+            echo "::error::Expected exactly one DMG."
+            exit 1
+          fi
+          dmg_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/${dmg_files[0]}"
+          printf '\n[Download LinkCam for macOS](%s)\n' "$dmg_url" >> release-notes.md
+          echo "dmg_url=$dmg_url" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        id: release
+        uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: LinkCam ${{ env.RELEASE_TAG }}
+          prerelease: ${{ steps.version.outputs.automatic == 'true' || steps.signing.outputs.signed != 'true' }}
+          make_latest: ${{ steps.version.outputs.automatic != 'true' && steps.signing.outputs.signed == 'true' && 'true' || 'false' }}
+          body_path: dist/release-notes.md
           files: |
+            dist/*.dmg
+            dist/*.dmg.sha256
             dist/*.tar.gz
-            dist/*.sha256
+            dist/*.tar.gz.sha256
+          fail_on_unmatched_files: true
           generate_release_notes: true
+
+      - name: Show download links
+        env:
+          DMG_URL: ${{ steps.package.outputs.dmg_url }}
+          RELEASE_URL: ${{ steps.release.outputs.url }}
+        run: |
+          printf '### LinkCam release\n\n[Download DMG](%s)\n\n[Release notes](%s)\n' "$DMG_URL" "$RELEASE_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/linkcam-signing.p12"
+          keychain="$RUNNER_TEMP/linkcam-signing.keychain-db"
+          if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi

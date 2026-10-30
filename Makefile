@@ -30,16 +30,26 @@ CORE_HEADERS := $(CORE)/LinkCamCore.h $(CORE)/LinkCamMath.h
 APP_SRCS := $(APP_SRC)/main.m $(APP_SRC)/AppDelegate.m $(APP_SRC)/LinkCamPopoverViewController.m $(APP_SRC)/CameraPreviewView.m
 APP_HEADERS := $(APP_SRC)/AppDelegate.h $(APP_SRC)/LinkCamPopoverViewController.h $(APP_SRC)/CameraPreviewView.h
 
-.PHONY: all app test clean
+.PHONY: all app dmg release test clean
 
 all: $(BIN)/linkcam-cli $(BIN)/uvc-util $(BIN)/xu-probe
 
 app: $(APP_EXEC)
 
-$(APP_EXEC): $(APP_SRCS) $(APP_HEADERS) $(CORE_SRCS) $(CORE_HEADERS) $(VENDOR_OBJS) app/Info.plist app/LinkCam.entitlements
+# Local DMGs are explicitly marked unnotarized. Public releases require
+# SIGNING_IDENTITY and NOTARY_PROFILE in the environment (see README).
+dmg: app
+	bash scripts/package-dmg.sh local
+
+release: app
+	bash scripts/package-dmg.sh release
+
+$(APP_EXEC): $(APP_SRCS) $(APP_HEADERS) $(CORE_SRCS) $(CORE_HEADERS) $(VENDOR_OBJS) app/Info.plist app/LinkCam.entitlements LICENSE src/vendor/LICENSE.uvc-util Makefile
 	mkdir -p $(APP_CONTENTS)/MacOS $(APP_CONTENTS)/Resources
 	$(CC) -o $@ $(APP_SRCS) $(CORE_SRCS) $(VENDOR_OBJS) -I$(APP_SRC) -I$(CORE) -I$(VENDOR) $(APP_FRAMEWORKS) $(CFLAGS) -mmacosx-version-min=13.0
 	cp app/Info.plist $(APP_CONTENTS)/Info.plist
+	cp LICENSE $(APP_CONTENTS)/Resources/LICENSE.txt
+	cp src/vendor/LICENSE.uvc-util $(APP_CONTENTS)/Resources/LICENSE.uvc-util.txt
 	$(CODESIGN) --force --sign - --identifier com.fmontes.linkcam --entitlements app/LinkCam.entitlements --timestamp=none $(APP_DIR)
 
 # User-facing CLI. Camera control is linked directly rather than parsed through

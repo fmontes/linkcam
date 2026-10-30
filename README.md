@@ -58,8 +58,106 @@ the macOS permission dialog. If access is denied, it provides a direct button
 to Privacy & Security settings and refreshes when you return. Pan, tilt, and
 zoom controls remain available without preview permission. The development
 bundle is ad-hoc signed so macOS can associate permission with the correct app
-identifier. Developer ID signing, notarization, and DMG packaging are planned
-for releases.
+identifier.
+
+### DMG downloads
+
+Create a universal disk image for local testing:
+
+```bash
+make dmg
+```
+
+This produces `dist/LinkCam-0.2.0-universal-unnotarized.dmg` and a `.sha256`
+checksum file. The image includes LinkCam, an Applications shortcut, and install
+instructions. Users drag LinkCam to Applications, eject the image, and launch
+the app from Applications. Requires macOS 13 or later; supports Apple Silicon
+and Intel. This test build is ad-hoc signed, so Gatekeeper can block downloads.
+
+For public downloads, install a **Developer ID Application** certificate with
+its private key in your macOS keychain (an Apple Development certificate does
+not qualify). Set up a notarization profile once; `notarytool` prompts for your
+Apple ID, team ID, and app-specific password and stores them in your keychain:
+
+```bash
+xcrun notarytool store-credentials LinkCam-notary
+```
+
+Then create the signed and notarized release:
+
+```bash
+export SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
+export NOTARY_PROFILE='LinkCam-notary'
+make release
+```
+
+The release command signs a copy of the app with the hardened runtime, notarizes
+and staples the app and DMG, and checks Gatekeeper acceptance. It leaves the
+development app unchanged and stops on signing or notarization errors. Upload
+`dist/LinkCam-0.2.0-universal.dmg` and its `.sha256` file to your website after
+testing installation on another Mac. The version in each filename comes from
+`app/Info.plist`; update both bundle version fields for subsequent releases.
+
+Signing and notarization require Apple Developer Program credentials and
+internet access. See Apple's [Developer ID distribution guide](https://developer.apple.com/developer-id/).
+
+### GitHub releases
+
+The [release workflow](.github/workflows/release.yml) runs after every push to
+`main`, including merged pull requests. It rebuilds and tests the universal binaries, packages the app
+as a DMG, and attaches the DMG, CLI archive, and SHA-256 checksums to a GitHub
+Release with generated release notes. Each automatic release gets a unique tag
+such as `v0.2.0-build.42` and uses the workflow run number as the app's build
+number. These builds are always prereleases and do not replace the latest
+stable release. No version bump, signing secrets, or repository variables are
+needed for automatic unnotarized builds.
+
+Every release includes a **Download LinkCam for macOS** link in its notes.
+The workflow run's summary also links directly to the DMG and release page.
+Find all downloads on the [Releases page](https://github.com/fmontes/linkcam/releases).
+
+You can also release a version tag such as `v0.2.0`. The tag must match
+`CFBundleShortVersionString` in `app/Info.plist`. Commit the packaging and
+workflow files before creating a tag:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+For subsequent releases, update both version fields in `app/Info.plist`, commit
+the changes, and push a new matching tag. You can also run **Actions → release →
+Run workflow** and supply an existing version tag.
+
+With no signing secrets, the workflow creates an **unnotarized prerelease**,
+with `-unnotarized` in the DMG filename and a warning in the release notes.
+It is not marked as the latest stable release. To publish signed and notarized
+DMGs, add all six repository secrets under **Settings → Secrets and variables →
+Actions**:
+
+| Secret | Value |
+| --- | --- |
+| `SIGNING_CERTIFICATE_BASE64` | Base64-encoded `.p12` export of the Developer ID Application certificate **and private key** |
+| `SIGNING_CERTIFICATE_PASSWORD` | Password used to protect that `.p12` export |
+| `SIGNING_IDENTITY` | Full Developer ID Application certificate name or SHA-1 hash |
+| `APPLE_ID` | Apple Developer account email |
+| `APPLE_TEAM_ID` | Apple Developer team ID |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for notarization |
+
+Export the certificate and private key from Keychain Access as a
+password-protected `.p12`, then copy its encoded contents for the secret:
+
+```bash
+base64 -i /path/to/DeveloperID.p12 | pbcopy
+```
+
+The workflow imports credentials into a temporary keychain and removes it at
+the end of the job, following GitHub's [certificate setup guidance](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications).
+Partially configured credentials, signing errors, and notarization failures stop
+the release; they never fall back to an unnotarized build. With all secrets
+configured, successful version-tag releases are published as the latest stable
+version; automatic builds from `main` remain prereleases.
+Link your website's download button to the DMG asset on the release page.
 
 ## Usage
 
@@ -170,6 +268,8 @@ Only the macOS **Command Line Tools** are needed (no full Xcode):
 make            # builds the universal CLI and diagnostic tools
 make test       # runs parser and command-line tests
 make app        # builds dist/LinkCam.app
+make dmg        # packages a local, unnotarized universal DMG
+make release    # signs and notarizes a DMG (requires credentials above)
 ```
 
 The project builds universal `arm64` + `x86_64` binaries. The uvc-util sources
