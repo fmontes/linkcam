@@ -54,6 +54,9 @@ jobs:
           fi
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
 
+      - name: Test signing selection
+        run: ruby tests/test_release_signing.rb
+
       - name: Build and test universal binaries
         # Rebuild the committed CLI binaries instead of trusting checkout mtimes.
         run: make -B test app
@@ -68,19 +71,15 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
-          required_secrets=(SIGNING_CERTIFICATE_BASE64 SIGNING_CERTIFICATE_PASSWORD SIGNING_IDENTITY APPLE_ID APPLE_TEAM_ID APPLE_APP_SPECIFIC_PASSWORD)
-          configured=0
-          for name in "${required_secrets[@]}"; do
-            if [[ -n "${!name}" ]]; then configured=$((configured + 1)); fi
-          done
-          if [[ "$configured" == 0 ]]; then
+          if [[ -z "$SIGNING_CERTIFICATE_BASE64" ]]; then
             echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No signing secrets configured; creating an unnotarized prerelease."
+            echo "::warning::No signing certificate configured; creating an unnotarized prerelease."
             exit 0
           fi
+          required_secrets=(SIGNING_CERTIFICATE_BASE64 SIGNING_CERTIFICATE_PASSWORD SIGNING_IDENTITY APPLE_ID APPLE_TEAM_ID APPLE_APP_SPECIFIC_PASSWORD)
           for name in "${required_secrets[@]}"; do
             if [[ -z "${!name}" ]]; then
-              echo "::error::Missing $name. Configure all signing secrets or remove them all for an unnotarized prerelease."
+              echo "::error::Missing $name. Configure all signing secrets or remove SIGNING_CERTIFICATE_BASE64 for an unnotarized prerelease."
               exit 1
             fi
           done

@@ -129,7 +129,7 @@ For subsequent releases, update both version fields in `app/Info.plist`, commit
 the changes, and push a new matching tag. You can also run **Actions → release →
 Run workflow** and supply an existing version tag.
 
-With no signing secrets, the workflow creates an **unnotarized prerelease**,
+Without `SIGNING_CERTIFICATE_BASE64`, the workflow creates an **unnotarized prerelease**,
 with `-unnotarized` in the DMG filename and a warning in the release notes.
 It is not marked as the latest stable release. To publish signed and notarized
 DMGs, add all six repository secrets under **Settings → Secrets and variables →
@@ -153,8 +153,10 @@ base64 -i /path/to/DeveloperID.p12 | pbcopy
 
 The workflow imports credentials into a temporary keychain and removes it at
 the end of the job, following GitHub's [certificate setup guidance](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications).
-Partially configured credentials, signing errors, and notarization failures stop
-the release; they never fall back to an unnotarized build. With all secrets
+Setting `SIGNING_CERTIFICATE_BASE64` enables signing. Missing companion secrets,
+signing errors, and notarization failures then stop the release; they never fall
+back to an unnotarized build. Other Apple account secrets alone do not enable
+signing. With all secrets
 configured, successful version-tag releases are published as the latest stable
 version; automatic builds from `main` remain prereleases.
 Link your website's download button to the DMG asset on the release page.
