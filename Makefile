@@ -74,10 +74,14 @@ $(BUILD):
 $(BUILD)/test-math: tests/test_math.c $(CORE)/LinkCamMath.c $(CORE)/LinkCamMath.h | $(BUILD)
 	$(CC) -o $@ tests/test_math.c $(CORE)/LinkCamMath.c -I$(CORE) -O2
 
-test: all $(BUILD)/test-math
+$(BUILD)/test-zoom-readback: tests/test_zoom_readback.m $(CORE_SRCS) $(CORE_HEADERS) $(VENDOR_OBJS) | $(BUILD)
+	$(CC) -o $@ tests/test_zoom_readback.m $(CORE)/LinkCamMath.c $(VENDOR_OBJS) -I$(CORE) -I$(VENDOR) $(CORE_FRAMEWORKS) $(CFLAGS)
+
+test: all $(BUILD)/test-math $(BUILD)/test-zoom-readback
 	$(BUILD)/test-math
+	$(BUILD)/test-zoom-readback
 	bash tests/test_cli.sh ./linkcam
 
 clean:
-	rm -f $(BIN)/linkcam-cli $(BIN)/uvc-util $(BIN)/xu-probe $(BUILD)/test-math
+	rm -f $(BIN)/linkcam-cli $(BIN)/uvc-util $(BIN)/xu-probe $(BUILD)/test-math $(BUILD)/test-zoom-readback
 	rm -rf $(APP_DIR)

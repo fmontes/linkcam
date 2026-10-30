@@ -291,14 +291,21 @@ static LinkCamResult readUVCZoom(LinkCamDevice *device, uint16_t *zoomUnits) {
 
     UVCValue *value = [control currentValue];
     if (!value || [value byteSize] < sizeof(uint16_t)) return LinkCamResultReadFailed;
-    *zoomUnits = *(uint16_t *)[value valuePtr];
+    uint16_t units = *(uint16_t *)[value valuePtr];
+    if (units < LINKCAM_ZOOM_MIN_UNITS || units > LINKCAM_ZOOM_MAX_UNITS) return LinkCamResultReadFailed;
+    *zoomUnits = units;
     return LinkCamResultOK;
 }
 
 static LinkCamResult readZoomUnlocked(LinkCamDevice *device, uint16_t *zoomUnits) {
+    // Prefer the camera's GET_CUR so a cached host value cannot hide external zoom changes.
+    LinkCamResult result = LinkCamResultControlUnavailable;
+    if (device->controller) {
+        result = readUVCZoom(device, zoomUnits);
+        if (result == LinkCamResultOK) return result;
+    }
     if (device->zoomControl) return readCMIOZoom(device, zoomUnits);
-    if (device->controller) return readUVCZoom(device, zoomUnits);
-    return LinkCamResultControlUnavailable;
+    return result;
 }
 
 static LinkCamResult readTrackingFeatureUnlocked(LinkCamDevice *device, int8_t *tracking) {
