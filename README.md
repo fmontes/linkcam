@@ -161,6 +161,21 @@ configured, successful version-tag releases are published as the latest stable
 version; automatic builds from `main` remain prereleases.
 Link your website's download button to the DMG asset on the release page.
 
+### Download counts
+
+GitHub tracks downloads for each release asset through its
+[release assets API](https://docs.github.com/en/rest/releases/assets).
+To see DMG download counts across all releases using the GitHub CLI:
+
+```bash
+gh api --paginate repos/fmontes/linkcam/releases \
+  --jq '.[] | .tag_name as $tag | .assets[] | select(.name | endswith(".dmg")) | "\($tag): \(.download_count) DMG downloads"'
+```
+
+These counts measure file downloads, not unique people or app installations.
+For download-button clicks and referral sources, use analytics on your website;
+those click counts measure a different step from GitHub's asset downloads.
+
 ## Usage
 
 ```bash
